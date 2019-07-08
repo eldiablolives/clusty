@@ -1,0 +1,141 @@
+- name: Install consul server
+  hosts: consul
+  gather_facts: True
+  become: false
+  tasks:
+    - name: Create consul user
+      user:
+          name: consul
+          comment: "Consul user"
+          system: yes
+          create_home: false
+          
+    - name: Creates consul config folder
+      file:
+        path: /etc/consul.d
+        state: directory
+        owner: consul
+        group: consul
+        mode: 0700
+        recurse: yes
+    - name: Creates consul var folder
+      file:
+        path: /var/consul
+        state: directory
+        owner: consul
+        group: consul
+        mode: 0775
+        recurse: yes
+
+    - name: Copy consul service
+      copy:
+        src: conf/system/consul.service 
+        dest: /etc/systemd/system/consul.service
+        owner: consul
+        group: consul
+        mode: 0644
+
+    - name: Generate key
+      command: consul keygen > /tmp/consul_encrypt_key
+      register: consul_keygen
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Copy consul configuration
+      template:
+        src: conf/controller/consul/config.conf
+        dest: /etc/consul.d/config.json
+        owner: consul
+        group: consul
+        mode: 0644
+
+    - name: Enable consul service
+      command: systemctl enable consul.service
+
+    - name: Restart consul service
+      service:
+        name: consul
+        state: restarted
+
+    - pause:
+        minutes: 1
+
+    - name: Bootstrap
+      command: curl --request PUT http://127.0.0.1:8500/v1/acl/bootstrap -o /tmp/consul.json
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Retrieving consul secrets
+      fetch:
+        src: /tmp/consul.json
+        dest: secrets/consul.json
+        flat: yes
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Get configured bootstraped ID
+      command: sh -c "cat /tmp/consul.json | jq  -r '.SecretID' > /tmp/consul_master_token"
+      register: result
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - fetch:
+        src: /tmp/consul_master_token
+        dest: secrets/consul_master_token
+        flat: yes
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - set_fact: consul_master_token="{{ lookup('file', 'secrets/consul_master_token') }}"
+
+    - debug:
+        msg: Consul master token is {{ consul_master_token }}
+
+    - name: Copy consul policy
+      template:
+        src: conf/controller/consul/policy.hcl
+        dest: /tmp/policy.hcl
+        owner: consul
+        group: consul
+        mode: 0644
+
+    - name: Creating policy
+      command: consul acl policy create -name {{ inventory_hostname }} -rules @/tmp/policy.hcl -token={{consul_master_token}}
+
+    - name: Copy token request
+      template:
+        src: conf/controller/consul/token-request.conf
+        dest: /tmp/token-request.json
+        owner: consul
+        group: consul
+        mode: 0644
+
+    - name: Creating token
+      command: sh -c 'curl --header "X-Consul-Token{{':'}} {{consul_master_token}}" -X PUT --data @/tmp/token-request.json http://127.0.0.1:8500/v1/acl/token > /tmp/{{ inventory_hostname }}.json'
+
+    # - name: Retrieving agent token
+    #   fetch:
+    #     src: /tmp/{{ inventory_hostname }}.json
+    #     dest: secrets/{{ inventory_hostname }}.json
+    #     flat: yes
+
+    - name: Get raw agent token
+      command: jq -r '.SecretID' /tmp/{{ inventory_hostname }}.json
+      register: result
+
+    - set_fact: consul_agent_token="{{ result['stdout'] }}"
+
+    - debug:
+        msg: Agent token is {{ consul_agent_token }}
+
+    - name: Setting agent token
+      command: consul acl set-agent-token -token={{consul_master_token}} agent {{ consul_agent_token }} 
+      register: result
+
+    - name: Open management console
+      command: open "http://{{hostvars[master].ansible_ssh_host}}:8500/ui"
+      delegate_to: 127.0.0.1
+
+
+# consul acl policy create -name XC01 -rules @/tmp/policy.hcl -token=329d103d-f8ee-96ed-8c6c-86c0fd4ccb53
+
+# consul acl token create -description "XC01 agent token" -policy-name XC01 -token=329d103d-f8ee-96ed-8c6c-86c0fd4ccb53
+
+# curl --header "X-Consul-Token: 329d103d-f8ee-96ed-8c6c-86c0fd4ccb53" -X PUT --data @/tmp/token-request.json http://127.0.0.1:8500/v1/acl/token > /tmp/xxxx
+
+# consul acl set-agent-token agent "<agent token here>"

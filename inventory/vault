@@ -1,0 +1,7 @@
+[vault]
+XC01
+XC02
+XC03
+
+[vault:vars]
+master=XC01

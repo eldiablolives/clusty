@@ -1,0 +1,137 @@
+- name: Install Nomad server
+  hosts: nomad
+  gather_facts: True
+  become: false
+  tasks:
+    - name: Create nomad user
+      user:
+          name: nomad
+          comment: "Nomad user"
+          system: yes
+          create_home: false
+    - name: Creates nomad config folder
+      file:
+        path: /etc/nomad.d
+        state: directory
+        owner: nomad
+        group: nomad
+        mode: 0700
+        recurse: yes
+    - name: Creates nomad data folder
+      file:
+        path: /var/nomad
+        state: directory
+        owner: nomad
+        group: nomad
+        mode: 0700
+        recurse: yes
+    - name: Copy nomad server policy
+      template:
+        src: conf/controller/nomad/nomad-server-policy.json
+        dest: /tmp/nomad-server-policy.json
+        owner: nomad
+        group: nomad
+        mode: 0644
+
+    #
+    # Setup Vault for nomad
+    #
+    - set_fact: vault_master_token="{{ lookup('file', 'secrets/vault_master_token') }}"
+
+    - name: Create nomad policy on Vault
+      command: curl --header "X-Vault-Token{{':'}} {{vault_master_token}}" --request PUT --data @/tmp/nomad-server-policy.json http://127.0.0.1:8200/v1/sys/policy/nomad
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Copy Vault nomad role
+      template:
+        src: conf/controller/nomad/nomad-role.json
+        dest: /tmp/nomad-role.json
+        owner: nomad
+        group: nomad
+        mode: 0644
+
+    - name: Create Vault nomad role
+      command: curl --header "X-Vault-Token{{':'}} {{vault_master_token}}" --request POST --data @/tmp/nomad-role.json http://127.0.0.1:8200/v1/auth/token/roles/nomad
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Copy Vault nomad token request
+      template:
+        src: conf/controller/nomad/nomad-token-request.json
+        dest: /tmp/nomad-token-request.json
+        owner: nomad
+        group: nomad
+        mode: 0644
+
+    - name: Create Vault nomad token
+      command: sh -c 'curl --header "X-Vault-Token{{':'}} {{vault_master_token}}" --request POST --data @/tmp/nomad-token-request.json http://127.0.0.1:8200/v1/auth/token/create > /tmp/nomad_token.json'
+
+    - name: Get raw Vault nomad token
+      command: jq -r '.auth.client_token' /tmp/nomad_token.json
+      register: result
+
+    - set_fact: vault_token="{{ result['stdout'] }}"
+
+    
+    #
+    # Configure Consul policy and get token for nomad
+    #
+    - name: Copy Consul policy
+      template:
+        src: conf/controller/nomad/consul-policy.hcl
+        dest: /tmp/consul-policy.hcl
+        owner: nomad
+        group: nomad
+        mode: 0644
+
+    - set_fact: consul_master_token="{{ lookup('file', 'secrets/consul_master_token') }}"
+
+    - debug:
+        msg: Consul master token is {{ consul_master_token }}
+
+    - name: Creating Consul policy
+      command: consul acl policy create -name nomad -rules @/tmp/consul-policy.hcl -token={{consul_master_token}}
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Copy Consul token request
+      template:
+        src: conf/controller/nomad/consul-token-request.json
+        dest: /tmp/consul-token-request.json
+        owner: nomad
+        group: nomad
+        mode: 0644
+
+    - name: Creating Consul token
+      command: sh -c 'curl --header "X-Consul-Token{{':'}} {{consul_master_token}}" -X PUT --data @/tmp/consul-token-request.json http://127.0.0.1:8500/v1/acl/token > /tmp/consul-token.json'
+
+    - name: Get raw agent token
+      command: jq -r '.SecretID' /tmp/consul-token.json
+      register: result
+
+    - set_fact: consul_token="{{ result['stdout'] }}"
+
+
+    #
+    # Configure finish configuring Nomad and restart service
+    #
+    - name: Copy nomad configuration
+      template:
+        src: conf/controller/nomad/nomad-server.hcl
+        dest: /etc/nomad.d/config.hcl
+        owner: nomad
+        group: nomad
+        mode: 0644
+    - name: Copy nomad service
+      copy:
+        src: conf/system/nomad.service 
+        dest: /etc/systemd/system/nomad.service
+        owner: nomad
+        group: nomad
+        mode: 0644
+    - name: Enable nomad service
+      command: systemctl enable nomad.service
+
+    - name: Restart nomad service
+      service:
+        name: nomad
+        state: restarted
+       

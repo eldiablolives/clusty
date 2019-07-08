@@ -1,0 +1,13 @@
+- name: Configure hosts
+  hosts: all
+  gather_facts: True
+  become: false
+  tasks:
+    - name: Configure host file
+      template:
+        src: conf/system/hosts
+        dest: /etc/hosts
+        owner: root
+        group: root
+        mode: 0644
+ 

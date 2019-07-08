@@ -1,0 +1,8 @@
+{
+  "policies": ["nomad"],
+  "ttl": "72h",
+  "renewable": true,
+  "explicit_max_ttl": 0,
+  "name": "nomad",
+  "orphan": true
+}

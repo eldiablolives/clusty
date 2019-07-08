@@ -1,0 +1,7 @@
+[nomad]
+XC01
+XC02
+XC03
+
+[nomad:vars]
+master=XC01

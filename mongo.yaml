@@ -1,0 +1,77 @@
+- name: Configure mongo server
+  hosts: mongo
+  gather_facts: True
+  become: false
+  tasks:
+    - name: Install mongo server
+      apt:
+        name: mongodb-org
+        state: present
+
+    - name: Restart mongo service
+      service:
+        name: mongod
+        state: restarted
+
+    - name: Preparing master user configuration
+      template:
+        src: conf/controller/mongo/master-user.conf
+        dest: /tmp/master-user.conf
+        owner: root
+        group: root
+        mode: 0644
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Configuring master user
+      command: sh -c "mongo < /tmp/master-user.conf"
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+ 
+    - file:
+        path: /var/mongo
+        state: directory
+        owner: root
+        group: root
+        mode: 0655
+
+    - name: Copy mongo communication key
+      template:
+        src: keys/keyfile
+        dest: /var/mongo/keyfile
+        owner: mongodb
+        group: mongodb
+        mode: 0400
+
+    - name: Copy mongo configuration
+      template:
+        src: conf/controller/mongo/mongod.conf
+        dest: /etc/mongod.conf
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Preparing master cluster configuration
+      template:
+        src: conf/controller/mongo/master-cluster.conf
+        dest: /tmp/master-cluster.conf
+        owner: root
+        group: root
+        mode: 0644
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Restart mongo service
+      service:
+        name: mongod
+        state: restarted
+
+    - name: Initiating cluster
+      command: sh -c "mongo -u root -p {{master_password}} --eval 'rs.initiate()' > /tmp/mongo.init"
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Getting status
+      command: sh -c "mongo -u root -p {{master_password}} --eval 'rs.status()' > /tmp/mongo.status"
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Adding nodes
+      command: sh -c "mongo -u root -p {{master_password}} < /tmp/master-cluster.conf"
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+ 

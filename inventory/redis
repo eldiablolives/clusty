@@ -1,0 +1,8 @@
+[redis]
+XC01
+XC02
+XC03
+
+[redis:vars]
+master_password=zR2AVhx63n1TNf91ETmB2T9tf5t7c8gn
+master=XC01

@@ -1,0 +1,9 @@
+{
+  "Description": "Nomad",
+  "Policies": [
+    {
+      "Name": "nomad"
+    }
+  ],
+  "Local": false
+}

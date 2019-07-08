@@ -1,0 +1,9 @@
+[consul]
+XC01
+XC02
+XC03
+
+[consul:vars]
+master=XC01
+consul_master_token=dae3549b-ecf4-b149-3e52-b007cc4fcd52
+consul_encrypt_key=Zz2QX/ERsaIxG851tTQ2aA==

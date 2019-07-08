@@ -1,0 +1,151 @@
+- name: Install vault server
+  hosts: vault
+  gather_facts: True
+  become: false
+  tasks:
+    - name: Create vault user
+      user:
+          name: vault
+          comment: "Vault user"
+          system: yes
+          create_home: false
+    - name: Creates vault config folder
+      file:
+        path: /etc/vault.d
+        state: directory
+        owner: vault
+        group: vault
+        mode: 0700
+        recurse: yes
+    - name: Creates vault var folder
+      file:
+        path: /var/vault
+        state: directory
+        owner: vault
+        group: vault
+        mode: 0700
+        recurse: yes
+
+    #
+    # Create consul vault policy and get the token
+    #
+    - name: Copy vault policy
+      template:
+        src: conf/controller/vault/policy.json
+        dest: /tmp/policy.json
+        owner: consul
+        group: consul
+        mode: 0644
+
+    - set_fact: consul_master_token="{{ lookup('file', 'secrets/consul_master_token') }}"
+
+    - debug:
+        msg: Consul master token is {{ consul_master_token }}
+
+    - name: Creating Vault policy
+      command: consul acl policy create -name vault -rules @/tmp/policy.json -token={{consul_master_token}}
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Copy vault token request
+      template:
+        src: conf/controller/vault/token-request.conf
+        dest: /tmp/token-request.json
+        owner: consul
+        group: consul
+        mode: 0644
+
+    - name: Creating token
+      command: sh -c 'curl --header "X-Consul-Token{{':'}} {{consul_master_token}}" -X PUT --data @/tmp/token-request.json http://127.0.0.1:8500/v1/acl/token > /tmp/vault-token.json'
+
+    - name: Get raw agent token
+      command: jq -r '.SecretID' /tmp/vault-token.json
+      register: result
+
+    - set_fact: vault_token="{{ result['stdout'] }}"
+
+    #
+    # Configure vault
+    #
+
+    - name: Copy vault configuration
+      template:
+        src: conf/controller/vault/vault.json
+        dest: /etc/vault.d/config.json
+        owner: vault
+        group: vault
+        mode: 0644
+    - name: Copy vault service
+      copy:
+        src: conf/system/vault.service 
+        dest: /etc/systemd/system/vault.service
+        owner: vault
+        group: vault
+        mode: 0644
+    - name: Enable vault service
+      command: systemctl enable vault.service
+
+    - name: Restart vault service
+      service:
+        name: vault
+        state: restarted
+
+    #
+    # Initalise vault and store the keys
+    #
+    - name: Copy vault initialisation
+      template:
+        src: conf/controller/vault/vault-init.json
+        dest: /tmp/vault-init.json
+        owner: vault
+        group: vault
+        mode: 0644
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Init vault
+      command: sh -c "curl --request PUT --data @/tmp/vault-init.json http://127.0.0.1:8200/v1/sys/init > /tmp/vault.json"
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Retrieving vault secrets
+      fetch:
+        src: /tmp/vault.json
+        dest: secrets/vault.json
+        flat: yes
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - name: Get extract master token
+      command: sh -c "cat /tmp/vault.json | jq  -r '.root_token' > /tmp/vault_master_token"
+      register: result
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    - fetch:
+        src: /tmp/vault_master_token
+        dest: secrets/vault_master_token
+        flat: yes
+      when: ansible_ssh_host == hostvars[master].ansible_ssh_host
+
+    #
+    # Unseal vault
+    #
+    - name: Copy vault keys
+      template:
+        src: secrets/vault.json
+        dest: /tmp/vault.json
+        owner: vault
+        group: vault
+        mode: 0644
+
+    - name: Copy unseal script
+      template:
+        src: conf/controller/vault/unseal.sh
+        dest: /tmp/unseal.sh
+        owner: vault
+        group: vault
+        mode: 0755
+
+    - name: Unsealing vault
+      command: sh -c /tmp/unseal.sh
+
+    # Management Console
+    - name: Open management console
+      command: open "http://{{hostvars[master].ansible_ssh_host}}:8200/ui"
+      delegate_to: 127.0.0.1

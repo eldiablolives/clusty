@@ -1,0 +1,51 @@
+- name: Configure redis server
+  hosts: redis
+  gather_facts: True
+  become: false
+  tasks:
+    - name: Install redis server
+      apt:
+          name: redis
+          state: present
+
+    - file:
+        path: /etc/redis
+        state: directory
+        mode: 0755
+
+    - name: Copy redis configuration
+      template:
+        src: conf/controller/redis/redis.conf
+        dest: /etc/redis/redis.conf
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Copy sentinel configuration
+      template:
+        src: conf/controller/redis/sentinel.conf
+        dest: /etc/redis/sentinel.conf
+        owner: redis
+        group: redis
+        mode: 0644
+
+    - name: Copy sentinel service
+      copy:
+        src: conf/controller/redis/redis-sentinel.service 
+        dest: /etc/systemd/system/redis-sentinel.service
+        mode: 0644
+
+    - name: Enable sentinel service
+      command: systemctl enable redis-sentinel.service
+
+    - name: Restart redis service
+      service:
+        name: redis
+        state: restarted
+
+    - name: Restart sentinel service
+      service:
+        name: redis
+        state: restarted
+ 
+       
